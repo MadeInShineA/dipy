@@ -49,3 +49,4 @@ build-install
 benchmarks/results/
 benchmarks/env/
 sg_execution_times.rst
+__marimo__/
