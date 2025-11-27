@@ -12,7 +12,6 @@ def _():
 
     from dipy.data import dsi_voxels
     from dipy.reconst.gqi import GeneralizedQSamplingModel
-
     return GeneralizedQSamplingModel, dsi_voxels, mo, np, plt
 
 
@@ -118,66 +117,75 @@ def _(mo):
 
 @app.cell
 def _(np, plt, results, voxel_coord):
-    def _():
-        fig, axes = plt.subplots(2, 2, figsize=(15, 10))
+    def plot_voxel_reconstruction(results, voxel_coord, figsize=(14, 9)):
+        methods = ["standard", "gqi2"]
+        method_labels = ["Standard GQI", "GQI2"]
+        colors = ["#1f77b4", "#ff7f0e"]
+
+        fig, axes = plt.subplots(2, 2, figsize=figsize)
         fig.suptitle(
-            f"Voxel {voxel_coord} Signal Reconstruction: Original vs. Predicted (Standard vs. GQI2 Methods)"
+            f"Voxel {voxel_coord} Signal Reconstruction: Original vs. Predicted",
+            fontsize=14,
+            weight='bold'
         )
 
-        for idx, method in enumerate(["standard", "gqi2"]):
-            result = results[method]
-            original = result["original"]
-            predicted = result["predicted"]
+        x = np.arange(len(results["standard"]["original"]))
 
-            # Scatter plot: Original vs Predicted
-            ax1 = axes[idx, 0]
-            ax1.scatter(original, predicted, alpha=0.6, s=20)
-            ax1.plot(
-                [original.min(), original.max()],
-                [original.min(), original.max()],
-                "r--",
-                lw=2,
-            )
-            ax1.set_xlabel("Original Signal")
-            ax1.set_ylabel("Predicted Signal")
-            ax1.set_title(
-                f"{method.title()} Method: Original vs Predicted\nCorrelation: {result['correlation']:.4f}"
-            )
-            ax1.grid(True, alpha=0.3)
+        for row, (method, label, color) in enumerate(zip(methods, method_labels, colors)):
+            orig = np.array(results[method]["original"])
+            pred = np.array(results[method]["predicted"])
+            corr = results[method]["correlation"]
+            mae = results[method]["mae"]
 
-            # Signal comparison plot
-            ax2 = axes[idx, 1]
-            x_pos = np.arange(len(original))
-            width = 0.35
+            # --- Left: Scatter plot (0 to max) ---
+            ax_scatter = axes[row, 0]
+            ax_scatter.scatter(orig, pred, alpha=0.7, s=25, color=color, edgecolor='k', linewidth=0.3)
 
-            ax2.bar(
-                x_pos - width / 2,
-                original,
-                width,
-                label="Original",
-                alpha=0.7,
-                color="blue",
-            )
-            ax2.bar(
-                x_pos + width / 2,
-                predicted,
-                width,
-                label="Predicted",
-                alpha=0.7,
-                color="red",
-            )
-            ax2.set_xlabel("Gradient Index")
-            ax2.set_ylabel("Signal Intensity")
-            ax2.set_title(
-                f"{method.title()} Method: Signal Comparison\nMAE: {result['mae']:.4f}"
-            )
-            ax2.legend()
-            ax2.grid(True, alpha=0.3)
+            # Compute shared axis limit: from 0 to max of both signals
+            max_val = max(orig.max(), pred.max())
+            ax_scatter.set_xlim(0, max_val)
+            ax_scatter.set_ylim(0, max_val)
 
-        plt.tight_layout(rect=[0, 0, 1, 0.96])  # Leave space for suptitle
+            # Identity line (only within [0, max_val])
+            ax_scatter.plot([0, max_val], [0, max_val], 'k--', lw=1.5, label="Perfect fit")
+
+            # Linear fit (optional but useful)
+            slope, intercept = np.polyfit(orig, pred, 1)
+            fit_x = np.array([0, max_val])
+            fit_y = slope * fit_x + intercept
+            ax_scatter.plot(fit_x, fit_y, color='red', lw=1.8, label=f"Fit: y={slope:.2f}x+{intercept:.2f}")
+
+            ax_scatter.set_xlabel("Original Signal")
+            ax_scatter.set_ylabel("Predicted Signal")
+            ax_scatter.set_title(f"{label}\nPearson r = {corr:.4f}")
+            ax_scatter.legend(fontsize=8)
+            ax_scatter.grid(True, alpha=0.3)
+            ax_scatter.set_aspect('equal', adjustable='box')  # square axes
+
+            # --- Right: Signal + residuals ---
+            ax_signal = axes[row, 1]
+            ax_signal.plot(x, orig, 'o-', color='black', label="Original", markersize=4, linewidth=1.2)
+            ax_signal.plot(x, pred, 'o--', color=color, label="Predicted", markersize=4, linewidth=1.2)
+
+            # Residuals on twin axis
+            ax_resid = ax_signal.twinx()
+            residuals = pred - orig
+            ax_resid.vlines(x, 0, residuals, colors='gray', linestyles=':', alpha=0.6, linewidth=1)
+            ax_resid.axhline(0, color='gray', linewidth=0.8)
+            ax_resid.set_ylabel("Residual (Pred – Orig)", color='gray')
+            ax_resid.tick_params(axis='y', labelcolor='gray')
+
+            ax_signal.set_xlabel("Gradient Index")
+            ax_signal.set_ylabel("Signal Intensity")
+            ax_signal.set_title(f"{label}\nMAE = {mae:.4f}")
+            ax_signal.legend()
+            ax_signal.grid(True, alpha=0.3)
+
+        plt.tight_layout(rect=[0, 0, 1, 0.95])
         return fig
 
-    _()
+    plot_voxel_reconstruction(results, voxel_coord)
+
     return
 
 
@@ -208,7 +216,6 @@ def _(GeneralizedQSamplingModel, data, gtab, np):
 
         # Calculate voxel-wise correlations
         correlations = []
-        valid_voxels = 0
         total_voxels = data.shape[0] * data.shape[1] * data.shape[2]
 
         for i in range(data.shape[0]):
@@ -221,14 +228,12 @@ def _(GeneralizedQSamplingModel, data, gtab, np):
                     if np.sum(original_voxel) == 0:
                         continue
 
-                    valid_voxels += 1
                     correlation = np.corrcoef(original_voxel, predicted_voxel)[0, 1]
                     correlations.append(correlation)
 
         _correlations = np.array(correlations)
 
         print(f"Total voxels: {total_voxels}")
-        print(f"Valid voxels (with signal): {valid_voxels}")
         print(f"Average correlation: {np.mean(correlations):.4f}")
         print(f"Min correlation: {np.min(_correlations):.4f}")
         print(f"Max correlation: {np.max(_correlations):.4f}")
@@ -249,7 +254,6 @@ def _(GeneralizedQSamplingModel, data, gtab, np):
             "avg_correlation": np.mean(correlations),
             "overall_correlation": overall_correlation,
             "overall_mae": overall_mae,
-            "valid_voxels": valid_voxels,
         }
     return (multi_results,)
 
@@ -263,56 +267,87 @@ def _(mo):
 
 
 @app.cell
-def _(multi_results, np, plt):
-    def _():
-        fig, axes = plt.subplots(2, 2, figsize=(15, 10))
-        fig.suptitle("Voxel-wise Signal Prediction Accuracy: Standard vs. GQI2 Methods")
+def _(data, multi_results, np, plt):
+    def plot_multi_voxel_results(multi_results, data_shape, figsize=(14, 10)):
+        methods = ["standard", "gqi2"]
+        method_labels = ["Standard GQI", "GQI2"]
+        colors = ["#1f77b4", "#ff7f0e"]
 
-        for idx, method in enumerate(["standard", "gqi2"]):
-            result = multi_results[method]
-            correlations = result["correlations"]
+        # Reconstruct 3D correlation maps for spatial visualization
+        corr_maps = {}
+        for method in methods:
+            correlations_flat = np.array(multi_results[method]["correlations"])
+            corr_map = np.full(data_shape[:3], np.nan)  # (X, Y, Z)
 
-            # Correlation distribution histogram
-            ax1 = axes[idx, 0]
-            ax1.hist(correlations, bins=30, alpha=0.7, color="blue", edgecolor="black")
-            ax1.axvline(
-                np.mean(correlations),
-                color="red",
-                linestyle="--",
-                linewidth=2,
-                label=f"Mean: {np.mean(correlations):.3f}",
-            )
-            ax1.set_xlabel("Voxel-wise Correlation")
-            ax1.set_ylabel("Frequency")
-            ax1.set_title(f"{method.title()} Method: Correlation Distribution")
-            ax1.legend()
-            ax1.grid(True, alpha=0.3)
+            # Refill in original order
+            idx = 0
+            for i in range(data_shape[0]):
+                for j in range(data_shape[1]):
+                    for k in range(data_shape[2]):
+                        if np.sum(data[i, j, k]) > 0:
+                            corr_map[i, j, k] = correlations_flat[idx]
+                            idx += 1
+            corr_maps[method] = corr_map
 
-            # Correlation vs Voxel Index
-            ax2 = axes[idx, 1]
-            ax2.plot(correlations, alpha=0.6, linewidth=1)
-            ax2.axhline(
-                np.mean(correlations),
-                color="red",
-                linestyle="--",
-                linewidth=2,
-                label=f"Mean: {np.mean(correlations):.3f}",
+        fig, axes = plt.subplots(2, 2, figsize=figsize)
+        fig.suptitle("Voxel-wise Signal Prediction Accuracy: Standard vs. GQI2", fontsize=14, weight='bold')
+
+        for row, (method, label, color) in enumerate(zip(methods, method_labels, colors)):
+            corr_flat = np.array(multi_results[method]["correlations"])
+            corr_map = corr_maps[method]
+
+            # 1. Histogram (left column)
+            ax_hist = axes[row, 0]
+            ax_hist.hist(corr_flat, bins=30, alpha=0.7, color=color, edgecolor='black', density=True)
+            mean_corr = np.mean(corr_flat)
+            ax_hist.axvline(mean_corr, color='red', linestyle='--', linewidth=2,
+                            label=f"Mean: {mean_corr:.4f}")
+            ax_hist.set_xlabel("Voxel-wise Pearson Correlation")
+            ax_hist.set_ylabel("Density")
+            ax_hist.set_title(f"{label}: Correlation Distribution")
+            ax_hist.legend()
+            ax_hist.grid(True, alpha=0.3)
+
+            # 2. Central slice of correlation map (right column)
+            ax_slice = axes[row, 1]
+            # Choose middle slice along the largest dimension for visibility
+            mid_i, mid_j, mid_k = np.array(data_shape[:3]) // 2
+            # Prefer axial (k) if reasonable size
+            if data_shape[2] > 1:
+                slice_data = corr_map[:, :, mid_k]
+                title = f"{label}: Correlation Map (Axial Slice z={mid_k})"
+            elif data_shape[1] > 1:
+                slice_data = corr_map[:, mid_j, :]
+                title = f"{label}: Correlation Map (Coronal Slice y={mid_j})"
+            else:
+                slice_data = corr_map[mid_i, :, :]
+                title = f"{label}: Correlation Map (Sagittal Slice x={mid_i})"
+
+            im = ax_slice.imshow(slice_data, cmap="viridis", origin="lower", vmin=0, vmax=1)
+            ax_slice.set_title(title)
+            plt.colorbar(im, ax=ax_slice, fraction=0.046, pad=0.04)
+
+            # Add summary stats as text
+            overall_corr = multi_results[method]["overall_correlation"]
+            overall_mae = multi_results[method]["overall_mae"]
+            stats_text = (
+                f"Mean corr: {mean_corr:.4f}\n"
+                f"Overall corr: {overall_corr:.4f}\n"
+                f"MAE: {overall_mae:.4f}"
             )
-            ax2.axhline(
-                0.5, color="orange", linestyle=":", linewidth=2, label="Threshold: 0.5"
+            ax_hist.text(
+                0.02, 0.98,
+                stats_text,
+                transform=ax_hist.transAxes,
+                fontsize=9,
+                verticalalignment='top',
+                bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8)
             )
-            ax2.set_xlabel("Voxel Index")
-            ax2.set_ylabel("Correlation")
-            ax2.set_title(
-                f"{method.title()} Method: Correlation per Voxel\nValid voxels: {len(correlations)}"
-            )
-            ax2.legend()
-            ax2.grid(True, alpha=0.3)
 
         plt.tight_layout()
         return fig
 
-    _()
+    plot_multi_voxel_results(multi_results, data.shape)
     return
 
 
@@ -346,7 +381,6 @@ def _(multi_results, results):
             f"Overall MAE = {result['overall_mae']:.4f}"
         )
 
-    print(f"\nValid voxels tested: {multi_results['standard']['valid_voxels']}")
 
     # Determine which method performed better
     std_corr = multi_results["standard"]["avg_correlation"]

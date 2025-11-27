@@ -12,18 +12,17 @@ def _():
 
     from dipy.data import dsi_voxels
     from dipy.reconst.gqi import GeneralizedQSamplingModel
-
     return GeneralizedQSamplingModel, dsi_voxels, mo, np, plt
 
 
 @app.cell
-def _(mo):
-    mo.md("""
+def _(mo, num_test_voxels, num_train_voxels):
+    mo.md(f"""
     # GQI Cross-Voxel Prediction Notebook
 
     This notebook demonstrates **cross-voxel prediction** in GQI reconstruction:
-    - For each voxel, fit GQI model on all other voxels
-    - Predict the excluded voxel's signal using the fitted models
+    - For {num_test_voxels} test voxels, fit GQI model on {num_train_voxels} other train voxels
+    - Predict train voxels signal using the fitted models
     - Compare predicted signals to the actual excluded voxel's signal
 
     **Key Concepts:**
@@ -59,17 +58,30 @@ def _(mo):
     mo.md("""
     ## 2. Cross-Voxel Test
 
-    For each voxel, fit GQI on all other voxels and predict the excluded voxel
+    For each test voxel, fit GQI on the train voxels and predict the test voxels
     """)
     return
 
 
 @app.cell
-def _(GeneralizedQSamplingModel, data, gtab, np):
+def _():
+    # Parameters
+    num_test_voxels = 10
+    num_train_voxels = 10
+    return num_test_voxels, num_train_voxels
+
+
+@app.cell
+def _(
+    GeneralizedQSamplingModel,
+    data,
+    gtab,
+    np,
+    num_test_voxels,
+    num_train_voxels,
+):
     def _():
-        # Parameters
-        num_test_voxels = 10
-        num_train_voxels = 10
+    
 
         # Test both methods
         cross_results = {}
@@ -171,58 +183,94 @@ def _(mo):
 
 
 @app.cell
-def _(cross_results, np, plt):
-    def _():
-        fig, axes = plt.subplots(2, 2, figsize=(15, 10))
+def _(cross_results, np, num_train_voxels, plt):
+    def plot_cross_voxel_results(cross_results, num_train_voxels=10):
+        methods = ["gqi2", "standard"]
+        method_labels = ["GQI2", "Standard GQI"]
+        colors = ["#1f77b4", "#ff7f0e"]
+        correlations_list = [cross_results[m]["correlations"] for m in methods]
+
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
         fig.suptitle(
-            "Cross-Voxel Prediction Accuracy per Voxel (using 10 training voxels): Standard vs. GQI2 Methods"
+            f"Cross-Voxel Prediction Accuracy (using {num_train_voxels} training voxels per test voxel)",
+            fontsize=14,
+            weight='bold'
         )
 
-        for idx, method in enumerate(["standard", "gqi2"]):
-            result = cross_results[method]
-            correlations = result["correlations"]
+        # --- Left: Violin + box + jitter ---
+        parts = ax1.violinplot(
+            correlations_list, 
+            positions=[1, 2],
+            showmeans=False,
+            showmedians=False,
+            widths=0.8
+        )
+        for pc, color in zip(parts['bodies'], colors):
+            pc.set_facecolor(color)
+            pc.set_alpha(0.6)
 
-            # Correlation distribution histogram
-            ax1 = axes[idx, 0]
-            ax1.hist(correlations, bins=30, alpha=0.7, color="green", edgecolor="black")
-            ax1.axvline(
-                np.mean(correlations),
-                color="red",
-                linestyle="--",
-                linewidth=2,
-                label=f"Mean: {np.mean(correlations):.3f}",
-            )
-            ax1.set_xlabel("Cross-Voxel Correlation")
-            ax1.set_ylabel("Frequency")
-            ax1.set_title(f"{method.title()} Method: Correlation Distribution")
-            ax1.legend()
-            ax1.grid(True, alpha=0.3)
+        ax1.boxplot(
+            correlations_list,
+            positions=[1, 2],
+            widths=0.15,
+            patch_artist=True,
+            boxprops=dict(facecolor='white', color='black'),
+            medianprops=dict(color='black'),
+            whiskerprops=dict(color='black'),
+            capprops=dict(color='black'),
+            flierprops=dict(marker='o', markersize=3, alpha=0.5)
+        )
 
-            # Correlation vs Voxel Index
-            ax2 = axes[idx, 1]
-            ax2.plot(correlations, alpha=0.6, linewidth=1)
-            ax2.axhline(
-                np.mean(correlations),
-                color="red",
-                linestyle="--",
-                linewidth=2,
-                label=f"Mean: {np.mean(correlations):.3f}",
+        for i, corr in enumerate(correlations_list, start=1):
+            x = np.random.normal(i, 0.04, size=len(corr))
+            ax1.scatter(x, corr, alpha=0.4, color=colors[i-1], s=10)
+
+        ax1.set_xticks([1, 2])
+        ax1.set_xticklabels(method_labels)
+        ax1.set_ylabel("Pearson Correlation")
+        ax1.set_ylim(-0.1, 1.0)
+        ax1.grid(True, linestyle='--', alpha=0.5)
+        ax1.set_title("Distribution of Prediction Correlations")
+
+        # --- Right: Density histograms ---
+        for corr, label, color in zip(correlations_list, method_labels, colors):
+            ax2.hist(corr, bins=25, alpha=0.6, label=label, color=color, density=True, edgecolor='black', linewidth=0.5)
+        ax2.set_xlabel("Correlation")
+        ax2.set_ylabel("Density")
+        ax2.legend()
+        ax2.grid(True, linestyle='--', alpha=0.5)
+        ax2.set_title("Correlation Density Comparison")
+
+        # --- Add summary statistics as text boxes ---
+        for idx, (corr, label, color) in enumerate(zip(correlations_list, method_labels, colors)):
+            mean_val = np.mean(corr)
+            min_val = np.min(corr)
+            max_val = np.max(corr)
+            std_val = np.std(corr)
+
+            stats_text = (
+                f"{label}:\n"
+                f"Mean: {mean_val:.4f}\n"
+                f"Min:  {min_val:.4f}\n"
+                f"Max:  {max_val:.4f}\n"
+                f"Std:  {std_val:.4f}"
             )
-            ax2.axhline(
-                0.5, color="orange", linestyle=":", linewidth=2, label="Threshold: 0.5"
+
+            # Position text on right plot (adjust x/y per method)
+            ax2.text(
+                0.02 if idx == 0 else 0.52,  # x: left for first, right for second
+                0.95 - idx * 0.5,           # y: top for first, lower for second
+                stats_text,
+                transform=ax2.transAxes,
+                fontsize=9,
+                verticalalignment='top',
+                bbox=dict(boxstyle="round,pad=0.3", facecolor=color, alpha=0.15)
             )
-            ax2.set_xlabel("Voxel Index")
-            ax2.set_ylabel("Correlation")
-            ax2.set_title(
-                f"{method.title()} Method: Correlation per Voxel\nValid voxels: {len(correlations)}"
-            )
-            ax2.legend()
-            ax2.grid(True, alpha=0.3)
 
         plt.tight_layout()
         return fig
 
-    _()
+    plot_cross_voxel_results(cross_results, num_train_voxels=num_train_voxels)
     return
 
 
@@ -256,6 +304,11 @@ def _(cross_results, np):
         print(f"\nGQI2 method performed better ({gqi2_corr:.4f} vs {std_corr:.4f})")
     else:
         print(f"\nBoth methods performed similarly ({std_corr:.4f})")
+    return
+
+
+@app.cell
+def _():
     return
 
 
