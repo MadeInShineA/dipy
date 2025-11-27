@@ -74,11 +74,12 @@ def _(get_fnames, gradient_table, np, sticks_and_ball):
         gtab, d=0.0015, S0=100, angles=stick_angles, fractions=stick_fractions, snr=None
     )
 
-    # Leave out some gradients for testing (e.g., last 15)
+    # Leave out some gradients for testing (randomly selected)
     n_total = len(bvals)
-    n_test = 15
-    train_indices = np.arange(n_total - n_test)
-    test_indices = np.arange(n_total - n_test, n_total)
+    n_test = 10
+    np.random.seed(42)  # For reproducibility
+    test_indices = np.random.choice(n_total, n_test, replace=False)
+    train_indices = np.setdiff1d(np.arange(n_total), test_indices)
 
     # Create training gradient table and data
     gtab_train = gradient_table(bvals=bvals[train_indices], bvecs=bvecs[train_indices])
