@@ -12,7 +12,20 @@ def _():
     from dipy.io.gradients import read_bvals_bvecs
     import numpy as np
     from dipy.core.gradients import gradient_table
-    return get_fnames, gradient_table, load_nifti, mo, np, read_bvals_bvecs
+
+    # Brain mask packages
+    from dipy.segment.mask import median_otsu
+    from dipy.core.histeq import histeq
+    return (
+        get_fnames,
+        gradient_table,
+        histeq,
+        load_nifti,
+        median_otsu,
+        mo,
+        np,
+        read_bvals_bvecs,
+    )
 
 
 @app.cell(hide_code=True)
@@ -46,6 +59,48 @@ def _(fbval, fbvec, fraw, gradient_table, load_nifti, read_bvals_bvecs):
     gtab = gradient_table(bvals, bvecs=bvecs)
     print(f"data.shape {data.shape}")
     return bvals, bvecs, data, gtab
+
+
+@app.cell
+def _(mo):
+    mo.md(r"""
+    ## Compute a brain mask
+    """)
+    return
+
+
+@app.cell
+def _(data, median_otsu):
+    masked_data, mask = median_otsu(data, vol_idx=[0])
+    return mask, masked_data
+
+
+@app.cell
+def _(data, histeq, masked_data, plt):
+    slice_idx = data.shape[2] // 2
+    volume_idx = 0
+
+    plt.figure("Brain segmentation", figsize=(10, 5))
+
+    # Original Image
+    plt.subplot(1, 2, 1)
+    plt.imshow(histeq(data[:, :, slice_idx, volume_idx].astype("float")).T, cmap="gray", origin="lower")
+    plt.title("Original b=0 Image")
+
+    plt.axis("off")
+
+    # Masked Image
+    plt.subplot(1, 2, 2)
+    plt.imshow(histeq(masked_data[:, :, slice_idx, volume_idx].astype("float")).T, cmap="gray", origin="lower")
+    plt.title("Masked b=0 Image")
+    plt.axis("off")
+
+    # Optional: Add a main figure title
+    plt.suptitle(f"Brain Segmentation of volume {volume_idx} using Median-Otsu", fontsize=14)
+
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95])  # Adjust layout to fit suptitle
+    plt.show()
+    return
 
 
 @app.cell(hide_code=True)
@@ -92,18 +147,10 @@ def _():
 def _(bvals, data, np, plot_slice):
     # Plot 5 random slices
     np.random.seed(42)
-    random_slices = np.random.choice(data.shape[-1], size=5, replace=False)
+    random_slices= np.random.choice(data.shape[-1], size=5, replace=False)
 
-    for idx in random_slices:
-        plot_slice(data, bvals, idx)
-    return
-
-
-@app.cell
-def _(mo):
-    mo.md(r"""
-    ## Initialize the Qball model
-    """)
+    for random_idx in random_slices:
+        plot_slice(data, bvals, random_idx)
     return
 
 
@@ -111,23 +158,27 @@ def _(mo):
 def _(mo):
     mo.md(r"""
     ## Split the data and gtab into train and test sets
+     - Note that B0 volumes are excluded from train and test sets
     """)
     return
 
 
 @app.cell
-def _(data, np):
+def _(gtab, np):
+    b0_indices = np.where(gtab.b0s_mask)[0]
+    non_b0_indices = np.where(~gtab.b0s_mask)[0]
 
-    N = data.shape[-1]
-    indices = np.random.permutation(N)
+    n_test = 2
+    n_train = len(non_b0_indices) - n_test
 
-    test_proportion = 0.01
-
-    split = int((1 - test_proportion) * N)
-    train_idx, test_idx = indices[:split], indices[split:]
+    # Shuffle only the non-b0 indices
+    permuted_non_b0 = np.random.permutation(non_b0_indices)
+    train_idx = permuted_non_b0[:n_train]
+    test_idx = permuted_non_b0[n_train:]
 
     print(f"Number of train gradients: {len(train_idx)}")
     print(f"Number of test gradients: {len(test_idx)}")
+    print(f"Number of b=0 volumes: {len(b0_indices)}")
     return test_idx, train_idx
 
 
@@ -167,32 +218,51 @@ def _(mo):
 
 
 @app.cell
-def _(test_gtab, train_data, train_gtab):
+def _(gradient_table, mask, test_gtab, train_data, train_gtab):
     import dipy.reconst.gqi as gqi
     import time
 
     # methods = ["standard", "standard_old"]
-    methods = ["standard", "gqi2"]
-    method_predicted_data = {}
+    methods = ["standard_old", "gqi2"]
+    method_predicted_data = {method: {} for method in methods}
+
+    interceptor_gtab = gradient_table(bvals=[0], bvecs=[[0, 0, 0]])
 
     for method in methods:
         # Build model
         model = gqi.GeneralizedQSamplingModel(train_gtab, method=method, sampling_length=0.9)
-        fit = model.fit(train_data)
-    
+        fit = model.fit(train_data, mask=mask)
+
         # Time prediction
         start_time = time.perf_counter()
         if method == "standard_old":
+            # TODO: Make this cleaner (this is bad in perf)
             predicted_data = fit.predict_old(test_gtab)
+            interceptor_data = fit.predict_old(interceptor_gtab)
         else:
+            # TODO: Make this cleaner (this is bad in perf)
             predicted_data = fit.predict(test_gtab)
+            interceptor_data = fit.predict(interceptor_gtab)
+
         end_time = time.perf_counter()
 
         elapsed = end_time - start_time
-        method_predicted_data[method] = predicted_data
+        method_predicted_data[method]["predicted_data"] = predicted_data
+        method_predicted_data[method]["interceptor_data"] = interceptor_data
+
 
         print(f"Time for {method}: {elapsed:.4f} seconds")
     return gqi, method_predicted_data
+
+
+@app.cell
+def _(method_predicted_data, test_data, train_data):
+    print(f"Train data max {train_data.max()} min {train_data.min()}")
+    print(f"Test data max {test_data.max()} min {test_data.min()}")
+
+    for _method, _predictions in method_predicted_data.items():
+        print(f"{_method} predictions max {_predictions["predicted_data"].max()} min {_predictions["predicted_data"].min()}")
+    return
 
 
 @app.cell(disabled=True)
@@ -289,16 +359,18 @@ def _(local_correlation, plt):
         methods = list(method_predicted_data.keys())
         n_methods = len(methods)
 
-        fig, axes = plt.subplots(n_methods, 3, figsize=(12, 3.8 * n_methods))
+        fig, axes = plt.subplots(n_methods, 5, figsize=(16, 3.8 * n_methods))
 
         if n_methods == 1:
             axes = axes[None, :]
 
         for i, method in enumerate(methods):
-            pred_vol = method_predicted_data[method][:, :, z_slice, vol_idx]
+            pred_vol = method_predicted_data[method]["predicted_data"][:, :, z_slice, vol_idx]
+            interceptor_vol = method_predicted_data[method]["interceptor_data"][:, :, z_slice, -1]
 
             # Compute local correlation map
-            corr_map = local_correlation(real_vol, pred_vol, window_size=window_size)
+            real_pred_corr_map = local_correlation(real_vol, pred_vol, window_size=window_size)
+            interceptor_pred_corr_map = local_correlation(interceptor_vol, pred_vol, window_size=window_size)
 
             # Real
             im_real = axes[i, 0].imshow(real_vol, cmap='gray', origin='lower')
@@ -313,11 +385,23 @@ def _(local_correlation, plt):
             axes[i, 1].axis('off')
             fig.colorbar(im_pred, ax=axes[i, 1], fraction=0.046, pad=0.04)
 
-            # Local Correlation (replaces error)
-            im_corr = axes[i, 2].imshow(corr_map, cmap='RdBu_r', origin='lower', vmin=-1, vmax=1)
-            axes[i, 2].set_title(f'Local Pearson Correlation\n(real vs prediction)', fontsize=12)
+            # Interceptor
+            im_interceptor = axes[i, 2].imshow(interceptor_vol, cmap='gray', origin='lower')
+            axes[i, 2].set_title(f'{method.upper()} interceptor', fontsize=12)
             axes[i, 2].axis('off')
-            fig.colorbar(im_corr, ax=axes[i, 2], fraction=0.046, pad=0.04)
+            fig.colorbar(im_interceptor, ax=axes[i, 2], fraction=0.046, pad=0.04)
+
+            # Local Correlation (real vs prediction)
+            im_corr = axes[i, 3].imshow(real_pred_corr_map, cmap='RdBu_r', origin='lower', vmin=-1, vmax=1)
+            axes[i, 3].set_title(f'Local Pearson Correlation\n(real vs prediction)', fontsize=12)
+            axes[i, 3].axis('off')
+            fig.colorbar(im_corr, ax=axes[i, 3], fraction=0.046, pad=0.04)
+
+             # Local Correlation (intercetor vs prediction)
+            im_corr = axes[i, 4].imshow(interceptor_pred_corr_map, cmap='RdBu_r', origin='lower', vmin=-1, vmax=1)
+            axes[i, 4].set_title(f'Local Pearson Correlation\n(interceptor vs prediction)', fontsize=12)
+            axes[i, 4].axis('off')
+            fig.colorbar(im_corr, ax=axes[i, 4], fraction=0.046, pad=0.04)
 
         fig.suptitle(f'Test Volume {vol_idx} | Z Slice {z_slice} | Corr window size {window_size} (b = {test_bvals[vol_idx]:.0f})', fontsize=14, y=0.98)
         plt.tight_layout(rect=[0, 0, 1, 0.96], h_pad=4.0)
