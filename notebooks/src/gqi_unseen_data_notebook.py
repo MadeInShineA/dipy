@@ -223,7 +223,7 @@ def _(gradient_table, mask, test_gtab, train_data, train_gtab):
     import time
 
     # methods = ["standard", "standard_old"]
-    methods = ["standard_old", "gqi2"]
+    methods = ["standard_old", "standard", "gqi2"]
     method_predicted_data = {method: {} for method in methods}
 
     interceptor_gtab = gradient_table(bvals=[0], bvecs=[[0, 0, 0]])
@@ -622,6 +622,11 @@ def _(
         f"GQI R2 : {cso_gqi_r2}\n"
 
     )
+    return
+
+
+@app.cell
+def _():
     return
 
 
