@@ -11,8 +11,9 @@ def _():
     import numpy as np
 
     from dipy.data import dsi_voxels
+    from dipy.core.gradients import gradient_table
     from dipy.reconst.gqi import GeneralizedQSamplingModel
-    return GeneralizedQSamplingModel, dsi_voxels, mo, np, plt
+    return GeneralizedQSamplingModel, dsi_voxels, gradient_table, mo, np, plt
 
 
 @app.cell
@@ -56,6 +57,30 @@ def _(dsi_voxels, np):
 
 @app.cell
 def _(mo):
+    mo.md(r"""
+    Remove the b0 volumes from the train data and train gtab
+    """)
+    return
+
+
+@app.cell
+def _(data, gradient_table, gtab, np):
+    non_b0_indices = np.where(~gtab.b0s_mask)[0]
+
+    train_data = data[..., non_b0_indices]
+
+    bvals = gtab.bvals
+    bvecs = gtab.bvecs
+
+    train_bvals = bvals[non_b0_indices]
+    train_bvecs = bvecs[non_b0_indices]
+
+    train_gtab = gradient_table(bvals=train_bvals, bvecs=train_bvecs)
+    return train_data, train_gtab
+
+
+@app.cell
+def _(mo):
     mo.md("""
     ## 2. Single Voxel Round-Trip Test
 
@@ -65,10 +90,10 @@ def _(mo):
 
 
 @app.cell
-def _(GeneralizedQSamplingModel, data, gtab, np):
+def _(GeneralizedQSamplingModel, np, train_data, train_gtab):
     # Select a voxel with good signal
     voxel_coord = (0, 0, 0)
-    voxel_data = data[voxel_coord]
+    voxel_data = train_data[voxel_coord]
 
     print(f"Selected voxel at {voxel_coord}")
     print(f"Signal range: [{voxel_data.min():.3f}, {voxel_data.max():.3f}]")
@@ -82,11 +107,11 @@ def _(GeneralizedQSamplingModel, data, gtab, np):
         print(f"\n--- Testing {_method} method ---")
 
         # Fit GQI model
-        _gq = GeneralizedQSamplingModel(gtab, method=_method, sampling_length=1.2)
+        _gq = GeneralizedQSamplingModel(train_gtab, method=_method, sampling_length=1.2)
         voxel_fit = _gq.fit(voxel_data)
 
         # Predict on same gradients (round-trip)
-        _voxel_predicted = voxel_fit.predict(gtab)
+        _voxel_predicted = voxel_fit.predict(train_gtab)
 
         # Calculate metrics
         _correlation = np.corrcoef(voxel_data, _voxel_predicted)[0, 1]
@@ -185,7 +210,6 @@ def _(np, plt, results, voxel_coord):
         return fig
 
     plot_voxel_reconstruction(results, voxel_coord)
-
     return
 
 
@@ -200,7 +224,7 @@ def _(mo):
 
 
 @app.cell
-def _(GeneralizedQSamplingModel, data, gtab, np):
+def _(GeneralizedQSamplingModel, np, train_data, train_gtab):
     # Test multi-voxel round-trip for both methods
     multi_results = {}
 
@@ -208,20 +232,20 @@ def _(GeneralizedQSamplingModel, data, gtab, np):
         print(f"\n=== Multi-voxel {_method} method ===")
 
         # Fit on entire 3D dataset
-        _gq = GeneralizedQSamplingModel(gtab, method=_method, sampling_length=1.2)
-        multi_fit = _gq.fit(data)
+        _gq = GeneralizedQSamplingModel(train_gtab, method=_method, sampling_length=1.2)
+        multi_fit = _gq.fit(train_data)
 
         # Predict on same gradients
-        multi_predicted = multi_fit.predict(gtab)
+        multi_predicted = multi_fit.predict(train_gtab)
 
         # Calculate voxel-wise correlations
         correlations = []
-        total_voxels = data.shape[0] * data.shape[1] * data.shape[2]
+        total_voxels = train_data.shape[0] * train_data.shape[1] * train_data.shape[2]
 
-        for i in range(data.shape[0]):
-            for j in range(data.shape[1]):
-                for k in range(data.shape[2]):
-                    original_voxel = data[i, j, k]
+        for i in range(train_data.shape[0]):
+            for j in range(train_data.shape[1]):
+                for k in range(train_data.shape[2]):
+                    original_voxel = train_data[i, j, k]
                     predicted_voxel = multi_predicted[i, j, k]
 
                     # Skip voxels with no signal
@@ -240,10 +264,10 @@ def _(GeneralizedQSamplingModel, data, gtab, np):
         print(f"Std correlation: {np.std(_correlations):.4f}")
 
         # Global metrics
-        overall_correlation = np.corrcoef(data.flatten(), multi_predicted.flatten())[
+        overall_correlation = np.corrcoef(train_data.flatten(), multi_predicted.flatten())[
             0, 1
         ]
-        overall_mae = np.mean(np.abs(data - multi_predicted))
+        overall_mae = np.mean(np.abs(train_data - multi_predicted))
 
         print(f"Overall correlation: {overall_correlation:.4f}")
         print(f"Overall MAE: {overall_mae:.4f}")
@@ -392,6 +416,11 @@ def _(multi_results, results):
         print(f"\nGQI2 method performed better ({gqi2_corr:.4f} vs {std_corr:.4f})")
     else:
         print(f"\nBoth methods performed similarly ({std_corr:.4f})")
+    return
+
+
+@app.cell
+def _():
     return
 
 

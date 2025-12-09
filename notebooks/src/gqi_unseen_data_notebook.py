@@ -46,7 +46,7 @@ def _(mo):
 
 @app.cell
 def _(get_fnames):
-    # fraw, fbval, fbvec = get_fnames(name="taiwan_ntu_dsi")
+    #fraw, fbval, fbvec = get_fnames(name="taiwan_ntu_dsi")
     fraw, fbval, fbvec = get_fnames(name="stanford_hardi")
     return fbval, fbvec, fraw
 
@@ -55,52 +55,10 @@ def _(get_fnames):
 def _(fbval, fbvec, fraw, gradient_table, load_nifti, read_bvals_bvecs):
     data, affine, voxel_size = load_nifti(fraw, return_voxsize=True)
     bvals, bvecs = read_bvals_bvecs(fbval, fbvec)
-    # bvecs[1:] = bvecs[1:] / np.sqrt(np.sum(bvecs[1:] * bvecs[1:], axis=1))[:, None]
-    gtab = gradient_table(bvals, bvecs=bvecs)
+    #bvecs[1:] = bvecs[1:] / np.sqrt(np.sum(bvecs[1:] * bvecs[1:], axis=1))[:, None]
+    gtab = gradient_table(bvals=bvals, bvecs=bvecs)
     print(f"data.shape {data.shape}")
     return bvals, bvecs, data, gtab
-
-
-@app.cell
-def _(mo):
-    mo.md(r"""
-    ## Compute a brain mask
-    """)
-    return
-
-
-@app.cell
-def _(data, median_otsu):
-    masked_data, mask = median_otsu(data, vol_idx=[0])
-    return mask, masked_data
-
-
-@app.cell
-def _(data, histeq, masked_data, plt):
-    slice_idx = data.shape[2] // 2
-    volume_idx = 0
-
-    plt.figure("Brain segmentation", figsize=(10, 5))
-
-    # Original Image
-    plt.subplot(1, 2, 1)
-    plt.imshow(histeq(data[:, :, slice_idx, volume_idx].astype("float")).T, cmap="gray", origin="lower")
-    plt.title("Original b=0 Image")
-
-    plt.axis("off")
-
-    # Masked Image
-    plt.subplot(1, 2, 2)
-    plt.imshow(histeq(masked_data[:, :, slice_idx, volume_idx].astype("float")).T, cmap="gray", origin="lower")
-    plt.title("Masked b=0 Image")
-    plt.axis("off")
-
-    # Optional: Add a main figure title
-    plt.suptitle(f"Brain Segmentation of volume {volume_idx} using Median-Otsu", fontsize=14)
-
-    plt.tight_layout(rect=[0, 0.03, 1, 0.95])  # Adjust layout to fit suptitle
-    plt.show()
-    return
 
 
 @app.cell(hide_code=True)
@@ -206,6 +164,48 @@ def _(bvals, bvecs, data, gradient_table, test_idx, train_idx):
     return test_bvals, test_data, test_gtab, train_data, train_gtab
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ## Compute a brain mask to make fit computation faster
+    """)
+    return
+
+
+@app.cell
+def _(data, median_otsu):
+    masked_data, mask = median_otsu(data, vol_idx=[0])
+    return mask, masked_data
+
+
+@app.cell
+def _(data, histeq, masked_data, plt):
+    slice_idx = data.shape[2] // 2
+    volume_idx = 0
+
+    plt.figure("Brain segmentation", figsize=(10, 5))
+
+    # Original Image
+    plt.subplot(1, 2, 1)
+    plt.imshow(histeq(data[:, :, slice_idx, volume_idx].astype("float")).T, cmap="gray", origin="lower")
+    plt.title("Original b=0 Image")
+
+    plt.axis("off")
+
+    # Masked Image
+    plt.subplot(1, 2, 2)
+    plt.imshow(histeq(masked_data[:, :, slice_idx, volume_idx].astype("float")).T, cmap="gray", origin="lower")
+    plt.title("Masked b=0 Image")
+    plt.axis("off")
+
+    # Optional: Add a main figure title
+    plt.suptitle(f"Brain Segmentation of volume {volume_idx} using Median-Otsu", fontsize=14)
+
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95])  # Adjust layout to fit suptitle
+    plt.show()
+    return
+
+
 @app.cell
 def _(mo):
     mo.md(r"""
@@ -222,71 +222,22 @@ def _(gradient_table, mask, test_gtab, train_data, train_gtab):
     import dipy.reconst.gqi as gqi
     import time
 
-    # methods = ["standard", "standard_old"]
-    methods = ["standard_old", "standard", "gqi2"]
+    methods = ["standard", "gqi2"]
     method_predicted_data = {method: {} for method in methods}
 
-    interceptor_gtab = gradient_table(bvals=[0], bvecs=[[0, 0, 0]])
+    b0_gtab = gradient_table(bvals=[0], bvecs=[[0, 0, 0]])
 
     for method in methods:
         # Build model
         model = gqi.GeneralizedQSamplingModel(train_gtab, method=method, sampling_length=0.9)
         fit = model.fit(train_data, mask=mask)
 
-        # Time prediction
-        start_time = time.perf_counter()
-        if method == "standard_old":
-            # TODO: Make this cleaner (this is bad in perf)
-            predicted_data = fit.predict_old(test_gtab)
-            interceptor_data = fit.predict_old(interceptor_gtab)
-        else:
-            # TODO: Make this cleaner (this is bad in perf)
-            predicted_data = fit.predict(test_gtab)
-            interceptor_data = fit.predict(interceptor_gtab)
+        predicted_data = fit.predict(test_gtab)
+        b0_data = fit.predict(b0_gtab)
 
-        end_time = time.perf_counter()
-
-        elapsed = end_time - start_time
         method_predicted_data[method]["predicted_data"] = predicted_data
-        method_predicted_data[method]["interceptor_data"] = interceptor_data
-
-
-        print(f"Time for {method}: {elapsed:.4f} seconds")
+        method_predicted_data[method]["b0_data"] = b0_data
     return gqi, method_predicted_data
-
-
-@app.cell
-def _(method_predicted_data, test_data, train_data):
-    print(f"Train data max {train_data.max()} min {train_data.min()}")
-    print(f"Test data max {test_data.max()} min {test_data.min()}")
-
-    for _method, _predictions in method_predicted_data.items():
-        print(f"{_method} predictions max {_predictions["predicted_data"].max()} min {_predictions["predicted_data"].min()}")
-    return
-
-
-@app.cell(disabled=True)
-def _(method_predicted_data, plt):
-    plt.figure(figsize=(6, 6))
-    plt.scatter(method_predicted_data["standard_old"], 
-                method_predicted_data["standard"], 
-                alpha=0.7)
-    plt.xlabel("Standard (Old)")
-    plt.ylabel("Standard (New)")
-    plt.title("Scatter Plot: Standard Old vs. Standard")
-    plt.grid(True, linestyle='--', alpha=0.5)
-    plt.show()
-    return
-
-
-@app.cell(disabled=True)
-def _(method_predicted_data, np):
-    np.testing.assert_array_almost_equal(
-        method_predicted_data["standard_old"],
-        method_predicted_data["standard"],
-        decimal=3
-    )
-    return
 
 
 @app.cell(hide_code=True)
@@ -366,11 +317,11 @@ def _(local_correlation, plt):
 
         for i, method in enumerate(methods):
             pred_vol = method_predicted_data[method]["predicted_data"][:, :, z_slice, vol_idx]
-            interceptor_vol = method_predicted_data[method]["interceptor_data"][:, :, z_slice, -1]
+            b0_vol = method_predicted_data[method]["b0_data"][:, :, z_slice, -1]
 
             # Compute local correlation map
             real_pred_corr_map = local_correlation(real_vol, pred_vol, window_size=window_size)
-            interceptor_pred_corr_map = local_correlation(interceptor_vol, pred_vol, window_size=window_size)
+            b0_pred_corr_map = local_correlation(b0_vol, pred_vol, window_size=window_size)
 
             # Real
             im_real = axes[i, 0].imshow(real_vol, cmap='gray', origin='lower')
@@ -381,15 +332,15 @@ def _(local_correlation, plt):
 
             # Predicted
             im_pred = axes[i, 1].imshow(pred_vol, cmap='gray', origin='lower')
-            axes[i, 1].set_title(f'{method.upper()} prediction', fontsize=12)
+            axes[i, 1].set_title(f'{method.upper()} test prediction', fontsize=12)
             axes[i, 1].axis('off')
             fig.colorbar(im_pred, ax=axes[i, 1], fraction=0.046, pad=0.04)
 
-            # Interceptor
-            im_interceptor = axes[i, 2].imshow(interceptor_vol, cmap='gray', origin='lower')
-            axes[i, 2].set_title(f'{method.upper()} interceptor', fontsize=12)
+            # b0 prediction
+            im_b0 = axes[i, 2].imshow(b0_vol, cmap='gray', origin='lower')
+            axes[i, 2].set_title(f'{method.upper()} b0 prediction', fontsize=12)
             axes[i, 2].axis('off')
-            fig.colorbar(im_interceptor, ax=axes[i, 2], fraction=0.046, pad=0.04)
+            fig.colorbar(im_b0, ax=axes[i, 2], fraction=0.046, pad=0.04)
 
             # Local Correlation (real vs prediction)
             im_corr = axes[i, 3].imshow(real_pred_corr_map, cmap='RdBu_r', origin='lower', vmin=-1, vmax=1)
@@ -397,9 +348,9 @@ def _(local_correlation, plt):
             axes[i, 3].axis('off')
             fig.colorbar(im_corr, ax=axes[i, 3], fraction=0.046, pad=0.04)
 
-             # Local Correlation (intercetor vs prediction)
-            im_corr = axes[i, 4].imshow(interceptor_pred_corr_map, cmap='RdBu_r', origin='lower', vmin=-1, vmax=1)
-            axes[i, 4].set_title(f'Local Pearson Correlation\n(interceptor vs prediction)', fontsize=12)
+             # Local Correlation (b0 predicion vs test prediction)
+            im_corr = axes[i, 4].imshow(b0_pred_corr_map, cmap='RdBu_r', origin='lower', vmin=-1, vmax=1)
+            axes[i, 4].set_title(f'Local Pearson Correlation\n(b0 vs test predictions)', fontsize=12)
             axes[i, 4].axis('off')
             fig.colorbar(im_corr, ax=axes[i, 4], fraction=0.046, pad=0.04)
 
