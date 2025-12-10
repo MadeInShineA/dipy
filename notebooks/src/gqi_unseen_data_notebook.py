@@ -19,7 +19,6 @@ def _():
     return (
         get_fnames,
         gradient_table,
-        histeq,
         load_nifti,
         median_otsu,
         mo,
@@ -73,26 +72,26 @@ def _(mo):
 def _():
     import matplotlib.pyplot as plt
 
-    def plot_slice(data, bvals, vol_idx=0, z_slice=None, title_prefix="Volume"):
+    def plot_slice(data, bval, bvec, volume_idx, z_slice=None):
         """
-        Plot a single 2D slice from a 4D diffusion volume.
+        Plot a single axial slice from a 3D diffusion MRI volume.
 
         Parameters:
-        - data: 4D array of shape (X, Y, Z, N)
-        - bvals: 1D array of b-values (length N)
-        - vol_idx: which volume (4th dim) to show
-        - z_slice: axial slice index; if None, use middle slice
-        - title_prefix: label for the plot title
+        - data: 3D array of the volume (X, Y, Z)
+        - bval: b-value (in s/mm²) of the volume, shown in the title
+        - bvec: 3-element b-vector (diffusion gradient direction), shown in the title
+        - volume_idx: index of the volume in the original 4D dataset (used for labeling)
+        - z_slice: axial slice index along the Z dimension; if None, uses the central slice
         """
         if z_slice is None:
-            z_slice = data.shape[2] // 2  # Use data, not test_data (more general)
+            z_slice = data.shape[2] // 2
 
-        vol = data[:, :, z_slice, vol_idx]
+        vol = data[:, :, z_slice]
 
-        fig, ax = plt.subplots(figsize=(6, 5))
+        fig, ax = plt.subplots(figsize=(10, 10))
 
         im = ax.imshow(vol, cmap='gray', origin='lower')
-        ax.set_title(f'{title_prefix} | Volume {vol_idx} (b={bvals[vol_idx]:.0f})')
+        ax.set_title(f'Volume {volume_idx} | bval ={bval} s/mm^2 | bvec = {bvec}')
         ax.axis('off')
         fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
 
@@ -102,13 +101,13 @@ def _():
 
 
 @app.cell
-def _(bvals, data, np, plot_slice):
+def _(bvals, bvecs, data, np, plot_slice):
     # Plot 5 random slices
     np.random.seed(42)
     random_slices= np.random.choice(data.shape[-1], size=5, replace=False)
 
     for random_idx in random_slices:
-        plot_slice(data, bvals, random_idx)
+        plot_slice(data[...,random_idx], bvals[random_idx], bvecs[random_idx], random_idx)
     return
 
 
@@ -161,7 +160,7 @@ def _(bvals, bvecs, data, gradient_table, test_idx, train_idx):
 
     print(f"Number of train voxels: {train_data.size}")
     print(f"Number of test voxels: {test_data.size}")
-    return test_bvals, test_data, test_gtab, train_data, train_gtab
+    return test_bvals, test_bvecs, test_data, test_gtab, train_data, train_gtab
 
 
 @app.cell(hide_code=True)
@@ -175,35 +174,7 @@ def _(mo):
 @app.cell
 def _(data, median_otsu):
     masked_data, mask = median_otsu(data, vol_idx=[0])
-    return mask, masked_data
-
-
-@app.cell
-def _(data, histeq, masked_data, plt):
-    slice_idx = data.shape[2] // 2
-    volume_idx = 0
-
-    plt.figure("Brain segmentation", figsize=(10, 5))
-
-    # Original Image
-    plt.subplot(1, 2, 1)
-    plt.imshow(histeq(data[:, :, slice_idx, volume_idx].astype("float")).T, cmap="gray", origin="lower")
-    plt.title("Original b=0 Image")
-
-    plt.axis("off")
-
-    # Masked Image
-    plt.subplot(1, 2, 2)
-    plt.imshow(histeq(masked_data[:, :, slice_idx, volume_idx].astype("float")).T, cmap="gray", origin="lower")
-    plt.title("Masked b=0 Image")
-    plt.axis("off")
-
-    # Optional: Add a main figure title
-    plt.suptitle(f"Brain Segmentation of volume {volume_idx} using Median-Otsu", fontsize=14)
-
-    plt.tight_layout(rect=[0, 0.03, 1, 0.95])  # Adjust layout to fit suptitle
-    plt.show()
-    return
+    return (mask,)
 
 
 @app.cell
@@ -218,25 +189,20 @@ def _(mo):
 
 
 @app.cell
-def _(gradient_table, mask, test_gtab, train_data, train_gtab):
+def _(mask, test_gtab, train_data, train_gtab):
     import dipy.reconst.gqi as gqi
     import time
 
     methods = ["standard", "gqi2"]
     method_predicted_data = {method: {} for method in methods}
 
-    b0_gtab = gradient_table(bvals=[0], bvecs=[[0, 0, 0]])
-
     for method in methods:
-        # Build model
         model = gqi.GeneralizedQSamplingModel(train_gtab, method=method, sampling_length=0.9)
         fit = model.fit(train_data, mask=mask)
 
         predicted_data = fit.predict(test_gtab)
-        b0_data = fit.predict(b0_gtab)
 
         method_predicted_data[method]["predicted_data"] = predicted_data
-        method_predicted_data[method]["b0_data"] = b0_data
     return gqi, method_predicted_data
 
 
@@ -253,7 +219,7 @@ def _(np):
     from scipy.stats import pearsonr
     from scipy.ndimage import generic_filter
 
-    def local_correlation(real, pred, window_size=5):
+    def local_correlation(real, pred, window_size=9):
         """
         Compute a local Pearson correlation map between `real` and `pred`.
         """
@@ -288,73 +254,76 @@ def _(np):
 
 @app.cell
 def _(local_correlation, plt):
-    def plot_all_methods_comparison(test_data, test_bvals, method_predicted_data, 
-                                   vol_idx, z_slice=None, window_size=5):
+    def plot_all_methods_comparison(
+        test_data, method_predicted_data, vol_idx, test_bval, test_bvec, z_slice=None, window_size=9
+    ):
         """
-        Plot real data, predictions from all methods, and local correlation maps.
-        Each method gets its own row: [Real | Predicted | Correlation]
+        Plot real data, predictions from all methods, and local Pearson correlation maps.
+        Each method gets its own row with three panels: [Real | Predicted | Local Correlation].
 
         Parameters:
-        - test_data: ndarray of shape (H, W, D, V) — ground truth
-        - test_bvals: optional b-values for title annotation
-        - method_predicted_data: dict {method_name: prediction_array}
-        - vol_idx: which volume (4th dim) to visualize
-        - z_slice: which axial slice (3rd dim); defaults to middle
-        - window_size: size of local neighborhood for correlation (odd integer, e.g., 5)
+        - test_data: 3D array of ground-truth test volume (X, Y, Z)
+        - method_predicted_data: 
+            dict mapping method names to prediction containers;
+            each value must contain a key "predicted_data" with a 4D array (X, Y, Z, N_vols)
+        - vol_idx: index of the test volume to visualize (selects the 4th dimension of predictions)
+        - test_bval: b-value (in s/mm²) of the selected volume, shown in the plot title
+        - test_bvec: 3-element b-vector (gradient direction) of the selected volume, shown in the title
+        - z_slice: axial slice index along the Z dimension; if None, uses the central slice
+        - window_size: size of the square window for local correlation (must be odd; default: 9)
         """
 
         if z_slice is None:
             z_slice = test_data.shape[2] // 2
 
-        real_vol = test_data[:, :, z_slice, vol_idx]
+        real_vol = test_data[:, :, z_slice]
         methods = list(method_predicted_data.keys())
         n_methods = len(methods)
 
-        fig, axes = plt.subplots(n_methods, 5, figsize=(16, 3.8 * n_methods))
+        fig, axes = plt.subplots(n_methods, 3, figsize=(13, 3.8 * n_methods))
 
         if n_methods == 1:
             axes = axes[None, :]
 
         for i, method in enumerate(methods):
-            pred_vol = method_predicted_data[method]["predicted_data"][:, :, z_slice, vol_idx]
-            b0_vol = method_predicted_data[method]["b0_data"][:, :, z_slice, -1]
+            pred_vol = method_predicted_data[method]["predicted_data"][
+                :, :, z_slice, vol_idx
+            ]
 
             # Compute local correlation map
-            real_pred_corr_map = local_correlation(real_vol, pred_vol, window_size=window_size)
-            b0_pred_corr_map = local_correlation(b0_vol, pred_vol, window_size=window_size)
+            real_pred_corr_map = local_correlation(
+                real_vol, pred_vol, window_size=window_size
+            )
 
             # Real
-            im_real = axes[i, 0].imshow(real_vol, cmap='gray', origin='lower')
+            im_real = axes[i, 0].imshow(real_vol, cmap="gray", origin="lower")
             if i == 0:
-                axes[i, 0].set_title('Real data', fontsize=12)
-            axes[i, 0].axis('off')
+                axes[i, 0].set_title("Real data", fontsize=12)
+            axes[i, 0].axis("off")
             fig.colorbar(im_real, ax=axes[i, 0], fraction=0.046, pad=0.04)
 
             # Predicted
-            im_pred = axes[i, 1].imshow(pred_vol, cmap='gray', origin='lower')
-            axes[i, 1].set_title(f'{method.upper()} test prediction', fontsize=12)
-            axes[i, 1].axis('off')
+            im_pred = axes[i, 1].imshow(pred_vol, cmap="gray", origin="lower")
+            axes[i, 1].set_title(f"{method.upper()} prediction", fontsize=12)
+            axes[i, 1].axis("off")
             fig.colorbar(im_pred, ax=axes[i, 1], fraction=0.046, pad=0.04)
 
-            # b0 prediction
-            im_b0 = axes[i, 2].imshow(b0_vol, cmap='gray', origin='lower')
-            axes[i, 2].set_title(f'{method.upper()} b0 prediction', fontsize=12)
-            axes[i, 2].axis('off')
-            fig.colorbar(im_b0, ax=axes[i, 2], fraction=0.046, pad=0.04)
-
             # Local Correlation (real vs prediction)
-            im_corr = axes[i, 3].imshow(real_pred_corr_map, cmap='RdBu_r', origin='lower', vmin=-1, vmax=1)
-            axes[i, 3].set_title(f'Local Pearson Correlation\n(real vs prediction)', fontsize=12)
-            axes[i, 3].axis('off')
-            fig.colorbar(im_corr, ax=axes[i, 3], fraction=0.046, pad=0.04)
+            im_corr = axes[i, 2].imshow(
+                real_pred_corr_map, cmap="RdBu_r", origin="lower", vmin=-1, vmax=1
+            )
+            axes[i, 2].set_title(
+                "Local Pearson Correlation\n(real vs prediction)", fontsize=12
+            )
+            axes[i, 2].axis("off")
+            fig.colorbar(im_corr, ax=axes[i, 2], fraction=0.046, pad=0.04)
 
-             # Local Correlation (b0 predicion vs test prediction)
-            im_corr = axes[i, 4].imshow(b0_pred_corr_map, cmap='RdBu_r', origin='lower', vmin=-1, vmax=1)
-            axes[i, 4].set_title(f'Local Pearson Correlation\n(b0 vs test predictions)', fontsize=12)
-            axes[i, 4].axis('off')
-            fig.colorbar(im_corr, ax=axes[i, 4], fraction=0.046, pad=0.04)
-
-        fig.suptitle(f'Test Volume {vol_idx} | Z Slice {z_slice} | Corr window size {window_size} (b = {test_bvals[vol_idx]:.0f})', fontsize=14, y=0.98)
+        fig.suptitle(
+            f"Test Volume {vol_idx} | Z Slice {z_slice} | "
+            f"Corr window size {window_size} | bval = {test_bval:.0f} s/mm^2 | bvec = {test_bvec}",
+            fontsize=14,
+            y=0.98,
+        )
         plt.tight_layout(rect=[0, 0, 1, 0.96], h_pad=4.0)
         plt.show()
     return (plot_all_methods_comparison,)
@@ -365,11 +334,12 @@ def _(
     method_predicted_data,
     plot_all_methods_comparison,
     test_bvals,
+    test_bvecs,
     test_data,
     test_idx,
 ):
     for i in range(len(test_idx)):
-        plot_all_methods_comparison(test_data, test_bvals, method_predicted_data, vol_idx=i, window_size=9)
+        plot_all_methods_comparison(test_data[..., i], method_predicted_data, i, test_bvals[i], test_bvecs[i], window_size=9)
     return
 
 
@@ -573,11 +543,6 @@ def _(
         f"GQI R2 : {cso_gqi_r2}\n"
 
     )
-    return
-
-
-@app.cell
-def _():
     return
 
 
