@@ -45,16 +45,16 @@ def _(mo):
 
 @app.cell
 def _(get_fnames):
-    #fraw, fbval, fbvec = get_fnames(name="taiwan_ntu_dsi")
-    fraw, fbval, fbvec = get_fnames(name="stanford_hardi")
+    fraw, fbval, fbvec = get_fnames(name="taiwan_ntu_dsi")
+    #fraw, fbval, fbvec = get_fnames(name="stanford_hardi")
     return fbval, fbvec, fraw
 
 
 @app.cell
-def _(fbval, fbvec, fraw, gradient_table, load_nifti, read_bvals_bvecs):
+def _(fbval, fbvec, fraw, gradient_table, load_nifti, np, read_bvals_bvecs):
     data, affine, voxel_size = load_nifti(fraw, return_voxsize=True)
     bvals, bvecs = read_bvals_bvecs(fbval, fbvec)
-    #bvecs[1:] = bvecs[1:] / np.sqrt(np.sum(bvecs[1:] * bvecs[1:], axis=1))[:, None]
+    bvecs[1:] = bvecs[1:] / np.sqrt(np.sum(bvecs[1:] * bvecs[1:], axis=1))[:, None]
     gtab = gradient_table(bvals=bvals, bvecs=bvecs)
     print(f"data.shape {data.shape}")
     return bvals, bvecs, data, gtab
