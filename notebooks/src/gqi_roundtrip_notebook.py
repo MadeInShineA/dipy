@@ -314,7 +314,7 @@ def _(data, multi_results, np, plt):
             corr_maps[method] = corr_map
 
         fig, axes = plt.subplots(2, 2, figsize=figsize)
-        fig.suptitle("Voxel-wise Signal Prediction Accuracy: Standard vs. GQI2", fontsize=14, weight='bold')
+        fig.suptitle("Voxel-wise Signal Reconstruction Accuracy:", fontsize=14, weight='bold')
 
         for row, (method, label, color) in enumerate(zip(methods, method_labels, colors)):
             corr_flat = np.array(multi_results[method]["correlations"])

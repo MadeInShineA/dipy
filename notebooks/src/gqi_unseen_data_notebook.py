@@ -318,13 +318,30 @@ def _(local_correlation, plt):
             axes[i, 2].axis("off")
             fig.colorbar(im_corr, ax=axes[i, 2], fraction=0.046, pad=0.04)
 
+        # Main title (bold, ends with colon, centered by default)
         fig.suptitle(
-            f"Test Volume {vol_idx} | Z Slice {z_slice} | "
-            f"Corr window size {window_size} | bval = {test_bval:.0f} s/mm^2 | bvec = {test_bvec}",
+            "Real vs. Predicted Signal and Local Correlation:",
             fontsize=14,
-            y=0.98,
+            weight='bold'
         )
-        plt.tight_layout(rect=[0, 0, 1, 0.96], h_pad=4.0)
+
+        # Subtitle with parameters (regular weight, explicitly centered)
+        bvec_str = f"[{test_bvec[0]:.2f}, {test_bvec[1]:.2f}, {test_bvec[2]:.2f}]"
+        subtitle = (
+            f"Test vol {vol_idx} | Z slice = {z_slice} | correlation window size = {window_size} | "
+            f"bval = {test_bval:.0f} s/mm² | bvec = {bvec_str}"
+        )
+        fig.text(
+            0.5, 0.94,                     # x=0.5 → horizontal center
+            subtitle,
+            ha='center',                   # horizontal alignment: center
+            va='top',                      # vertical alignment
+            fontsize=11,
+            weight='normal'
+        )
+
+        # Adjust layout to prevent overlap with titles
+        plt.tight_layout(rect=[0, 0, 1, 0.91])
         plt.show()
     return (plot_all_methods_comparison,)
 
